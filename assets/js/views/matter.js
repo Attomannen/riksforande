@@ -100,6 +100,7 @@
         m.chamberDecision ? h('span.tag.good', m.chamberDecision) : null) : null,
       h('section.section',
         h('h2', 'Beslutspunkter', h('small.muted', 'Varje punkt beslutas för sig – de flesta utan votering')),
+        points.length ? null : ui.empty('Beslutspunkterna har inte publicerats ännu – de visas här när betänkandet är klart.'),
         points.map((p) => pointCard(p, p.voteId ? byVoteId.get(p.voteId) || votes.find((v) => String(v.punkt) === p.punkt) : null, pc, rm, m ? m.reservations : []))),
       h('section.section', ui.docsPanel(m, { skipSummary: !!(m && m.decisionSummary) })));
   };

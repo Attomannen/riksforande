@@ -358,6 +358,40 @@
     };
   }
 
+  const isoDay = (d) => d.toISOString().slice(0, 10);
+
+  /** The chamber's calendar for a riksmöte: opening day and upcoming decision days ("Beslut", i.e. votes). */
+  function chamberCalendar(rm) {
+    return cached(`kalender:v1:${rm}`, 3 * HOUR, async () => {
+      const start = parseInt(rm, 10);
+      const until = isoDay(new Date(Date.now() + 150 * DAY));
+      const j = await getJSON('/kalender/', { utformat: 'json', org: 'kamm', from: `${start}-09-01`, tom: until });
+      const events = arr(j && j.kalenderlista && j.kalenderlista.kalender)
+        .filter((e) => /^\d{8}/.test(e.DTSTART || ''))
+        .map((e) => ({ date: `${e.DTSTART.slice(0, 4)}-${e.DTSTART.slice(4, 6)}-${e.DTSTART.slice(6, 8)}`, summary: e.SUMMARY || '', cats: e.CATEGORIES || '' }));
+      return {
+        opening: events.filter((e) => /riksmötets öppnande/i.test(e.summary)).map((e) => e.date).sort()[0] || null,
+        decisionDays: [...new Set(events.filter((e) => /votering/i.test(e.cats)).map((e) => e.date))].sort(),
+      };
+    });
+  }
+
+  /** Committee reports in a riksmöte that the chamber has not decided yet; decisionDay is set once it is scheduled. */
+  function pendingReports(rm) {
+    return cached(`pendingBet:v1:${rm}`, 3 * HOUR, async () => {
+      const docs = await fetchDocList({ doktyp: 'bet', rm });
+      return docs.filter((d) => d.status === 'planerat').map((d) => ({
+        dokId: d.dok_id,
+        rm: d.rm,
+        bet: d.beteckning,
+        title: d.titel,
+        organ: d.organ,
+        date: (d.datum || '').slice(0, 10),
+        decisionDay: (d.beslutsdag || '').slice(0, 10) || null,
+      }));
+    });
+  }
+
   /**
    * Government bills (propositioner) and communications (skrivelser) from the last three riksmöten.
    * Bills not decided before an election carry over, so older years can still be pending.
@@ -506,6 +540,7 @@
     api: {
       voteIndex, partyCounts, voteRows, memberVotes, matter, docStatus, docHtml,
       members, person, partyLeaders, fetchCounts, clearCache, cached, ttlFor, getJSON, propositions,
+      chamberCalendar, pendingReports,
     },
   });
 })(window.RF);

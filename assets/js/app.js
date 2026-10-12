@@ -43,6 +43,7 @@
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', !!route && a.dataset.tab === route.tab));
     // Pending bills and the About page don't depend on the selected riksmöte.
     document.querySelector('.rm-select').hidden = !!route && (route.tab === 'props' || route.tab === 'about');
+    updateBanner(route, path, my);
     const ctx = {
       el: app,
       rm: RF.state.rm,
@@ -87,10 +88,39 @@
     else render();
   }
 
+  /**
+   * Right after an election the new riksmöte has opened but nobody has voted yet.
+   * Say so (with the first decision day from the chamber calendar) instead of silently showing last year.
+   */
+  async function updateBanner(route, path, my) {
+    const el = document.getElementById('rm-banner');
+    const { rm, latestRm, currentRm } = RF.state;
+    let kind = null;
+    if (route && currentRm !== latestRm) {
+      if (route.tab === 'votes' && path === '/votes' && rm === latestRm) kind = 'previous';
+      else if ((route.tab === 'parties' || route.tab === 'members') && rm === currentRm) kind = 'empty';
+    }
+    if (!kind) { el.hidden = true; RF.clear(el); return; }
+    const cal = await api.chamberCalendar(currentRm).catch(() => null);
+    if (my !== token) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const next = cal && cal.decisionDays.find((d) => d >= today);
+    const when = next ? ['första beslutsdag är ', h('b', RF.fmtDate(next))] : 'inga beslutsdagar är planerade ännu';
+    mount(el, kind === 'previous'
+      ? h('div.callout.row',
+        h('span', { style: { flex: 1, minWidth: '240px' } }, `Riksmötet ${currentRm} har börjat, men kammaren har inte röstat ännu – `, when, `. Här visas ${latestRm}.`),
+        h('button.btn.small', { type: 'button', onclick: () => setRm(currentRm) }, `Visa vad som väntar ${currentRm}`))
+      : h('div.callout.row',
+        h('span', { style: { flex: 1, minWidth: '240px' } }, `Inga voteringar ännu under ${currentRm} – `, when, '. Siffrorna nedan fylls på efter det.'),
+        h('button.btn.small', { type: 'button', onclick: () => setRm(latestRm) }, `Visa ${latestRm}`)));
+    el.hidden = false;
+  }
+
   async function detectLatestRm() {
     const cur = RF.rmForDate(new Date());
     try {
-      const has = await api.cached(`hasVotes:${cur}`, 6 * 3600e3, async () => {
+      // Checked hourly so the app switches to a new riksmöte soon after its first vote.
+      const has = await api.cached(`hasVotes:${cur}`, 3600e3, async () => {
         const j = await api.getJSON('/voteringlista/', { rm: cur, sz: 1, utformat: 'json' });
         return RF.arr(j && j.voteringlista && j.voteringlista.votering).length > 0;
       });
@@ -102,8 +132,15 @@
 
   async function initRm() {
     const list = RF.rmList(2010);
+    RF.state.currentRm = RF.rmForDate(new Date());
     RF.state.latestRm = await detectLatestRm();
-    mount(rmSelect, list.map((rm) => h('option', { value: rm }, rm === RF.state.latestRm ? `${rm} (senaste)` : rm)));
+    const { currentRm, latestRm } = RF.state;
+    const label = (rm) => {
+      if (rm === currentRm) return rm === latestRm ? `${rm} (pågående)` : `${rm} (inga voteringar än)`;
+      if (rm === latestRm) return `${rm} (senaste voteringar)`;
+      return rm;
+    };
+    mount(rmSelect, list.map((rm) => h('option', { value: rm }, label(rm))));
     const saved = store.get('rf:rm', true);
     RF.state.rm = saved && list.includes(saved) ? saved : RF.state.latestRm;
     rmSelect.value = RF.state.rm;

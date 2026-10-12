@@ -448,6 +448,9 @@ details.more[open] > summary { margin-bottom: 8px; }
   background: color-mix(in srgb, var(--ja) 9%, var(--surface)); border-left: 4px solid var(--ja);
 }
 .callout b { font-weight: 600; }
+.callout.row { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; }
+#rm-banner { padding-top: 16px; }
+#rm-banner:not([hidden]) + main.container { padding-top: 12px; }
 .callout a { font-weight: 600; }
 
 .tooltip {

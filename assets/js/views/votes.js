@@ -30,6 +30,48 @@
       }));
   }
 
+  function reportCard(r) {
+    return h('article.card', { style: { padding: '12px 16px' } },
+      h('div.row', { style: { alignItems: 'baseline' } },
+        h('a', { href: `#/matter/${rmSlug(r.rm)}/${encodeURIComponent(r.bet)}`, style: { fontWeight: 600, flex: 1, minWidth: '200px' } }, r.title),
+        r.decisionDay ? h('span.tag.good', `Planerat beslut ${fmtDate(r.decisionDay)}`) : h('span.tag', 'Under beredning')),
+      h('div.matter-meta', h('span.nowrap', `${r.rm}:${r.bet}`), h('span', committee(r.organ).sv)));
+  }
+
+  /** A riksmöte that has opened but not voted yet: say when voting starts and what is on its way. */
+  async function renderNoVotesYet(ctx, body, rm) {
+    mount(body, ui.loading('Hämtar kammarens planering…'));
+    const [cal, reports] = await Promise.all([
+      api.chamberCalendar(rm).catch(() => null),
+      api.pendingReports(rm).catch(() => []),
+    ]);
+    if (!ctx.alive()) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const next = cal && cal.decisionDays.find((d) => d >= today);
+    const planned = reports.filter((r) => r.decisionDay).sort((a, b) => a.decisionDay.localeCompare(b.decisionDay) || a.title.localeCompare(b.title, 'sv'));
+    const preparing = reports.filter((r) => !r.decisionDay).sort((a, b) => b.date.localeCompare(a.date));
+    const fallback = RF.state.latestRm && RF.state.latestRm !== rm ? RF.state.latestRm : RF.prevRm(rm);
+    const preparingEl = h('div');
+
+    mount(body,
+      h('div.card',
+        h('h2', `Kammaren har inte röstat ännu under riksmötet ${rm}`),
+        h('p',
+          cal && cal.opening ? `Riksmötet öppnades ${fmtDate(cal.opening)}. ` : '',
+          next ? ['Första planerade beslutsdag är ', h('b', fmtDate(next)), ' – voteringarna visas här samma dag eller dagen efter.'] : 'Inga beslutsdagar är planerade ännu.'),
+        h('p.muted', { style: { fontSize: '.9rem' } }, 'Efter ett val börjar riksmötet med att riksdagen väljer talman och utskott och håller den allmänpolitiska debatten. Voteringar kommer först när utskotten har lämnat sina betänkanden.'),
+        h('div.row',
+          h('button.btn.primary', { type: 'button', onclick: () => ctx.setRm(fallback) }, `Visa voteringarna från ${fallback}`),
+          h('a.btn', { href: '#/props' }, 'Propositioner som väntar på beslut'))),
+      planned.length ? h('section.section',
+        h('h2', 'Planerade beslut', h('small.muted', 'Betänkanden som har fått en beslutsdag i kammaren')),
+        h('div.stack', planned.map(reportCard))) : null,
+      preparing.length ? h('section.section',
+        h('h2', `Under beredning i utskotten (${preparing.length})`, h('small.muted', 'Betänkanden som ännu inte har fått en beslutsdag')),
+        preparingEl) : null);
+    if (preparing.length) ui.pagedList(preparingEl, preparing, reportCard, 15);
+  }
+
   RF.views.votes = async function (ctx) {
     const { el, rm } = ctx;
     const head = h('div.page-head',
@@ -52,10 +94,7 @@
     if (!ctx.alive()) return;
 
     if (!index.length) {
-      mount(body, h('div.card',
-        h('h2', `Inga voteringar registrerade för ${rm} ännu`),
-        h('p.muted', 'Riksmötet kan precis ha börjat. Voteringar dyker upp här strax efter att de har hållits i kammaren.'),
-        h('button.btn', { type: 'button', onclick: () => ctx.setRm(RF.prevRm(rm)) }, `Visa ${RF.prevRm(rm)} i stället`)));
+      await renderNoVotesYet(ctx, body, rm);
       return;
     }
 
