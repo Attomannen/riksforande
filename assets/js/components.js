@@ -372,6 +372,27 @@
       h('div.docs', blocks));
   }
 
+  // ---------------------------------------------------------------- leaders per riksmöte
+  /** "sedan 2021", "2012–2021", or "från 4 nov. 2021" / "till 3 nov. 2021" when the change fell within the riksmöte. */
+  function tenure(entry, rm) {
+    const s = parseInt(rm, 10);
+    const a = `${s}-09-01`, b = `${s + 1}-08-31`;
+    const parts = [];
+    if (entry.since && entry.since >= a && entry.since <= b) parts.push(`från ${fmtDate(entry.since)}`);
+    if (entry.until && entry.until >= a && entry.until <= b) parts.push(`till ${fmtDate(entry.until)}`);
+    if (parts.length) return parts.join(' ');
+    if (entry.until) return `${(entry.since || '').slice(0, 4)}–${entry.until.slice(0, 4)}`;
+    return entry.since ? `sedan ${entry.since.slice(0, 4)}` : '';
+  }
+
+  /** Whether a party leader sat in the chamber during the riksmöte (ministers do not vote). */
+  function leaderSeat(entry, comp, served) {
+    const p = entry.person;
+    const sat = served.has(p.iid);
+    if (comp.live) return sat ? 'Sitter i riksdagen' : p.status && !/ersättare/i.test(p.status) ? `${p.status} · röstar inte i kammaren` : 'Inte tjänstgörande ledamot';
+    return sat ? 'Satt i riksdagen under riksmötet' : 'Röstade inte i kammaren under riksmötet';
+  }
+
   // ---------------------------------------------------------------- stepper
   /** steps: [{label, sub}]; current: index of the active step (steps before it are done). */
   function stepper(steps, current, opts = {}) {
@@ -422,6 +443,7 @@
     ui: {
       partyBadge, avatar, photoFor, votePill, rebelBadge, voteBar, voteLegend, loading, progress, errorBox, tile, empty,
       pagedList, sortableTable, personCell, hemicycle, docsPanel, docItem, openReader, initTooltip, stepper,
+      tenure, leaderSeat,
     },
   });
 })(window.RF);

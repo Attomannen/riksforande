@@ -4,16 +4,19 @@
   const { h, mount, api, ui, analysis, pct, fmtNum, fmtDate, plural, norm, partyInfo, rmSlug, PARTY_ORDER, debounce } = RF;
   RF.views = RF.views || {};
 
-  function leaderCard(entry, sitting) {
+  function leaderCard(entry, comp, served, rm) {
     const p = entry.person;
+    const sat = served.has(p.iid);
+    let seat;
+    if (comp.live) seat = sat ? `Riksdagsledamot${p.valkrets ? ' · ' + p.valkrets : ''}` : `${p.status || 'Inte tjänstgörande ledamot'} – röstar inte i kammaren under uppdraget; en ersättare har platsen.`;
+    else seat = sat ? `Satt i riksdagen under riksmötet ${rm}` : `Röstade inte i kammaren under riksmötet ${rm} – till exempel som statsråd, då en ersättare har platsen.`;
     const record = h('div.stack', { style: { marginTop: '8px' } }, ui.loading('Hämtar röstningshistorik…'));
     const card = h('div.card.leader-hero',
       ui.avatar(p, 'xl'),
       h('div.info',
-        h('div.role', `${entry.role}${entry.since ? ` sedan ${fmtDate(entry.since)}` : ''}`),
+        h('div.role', `${entry.role} ${ui.tenure(entry, rm)}`.trim()),
         h('h2', { style: { margin: '2px 0 4px', fontSize: '1.4rem' } }, h('a', { href: `#/member/${p.iid}` }, p.name)),
-        h('div.muted', { style: { fontSize: '.9rem' } },
-          sitting ? `Riksdagsledamot${p.valkrets ? ' · ' + p.valkrets : ''}` : `${p.status || 'Inte tjänstgörande ledamot'} – röstar inte i kammaren under uppdraget; en ersättare har platsen.`),
+        h('div.muted', { style: { fontSize: '.9rem' } }, seat),
         record,
         h('div.row', { style: { marginTop: '8px' } },
           h('a.btn.small', { href: `#/member/${p.iid}` }, 'Profil och alla röster'),
@@ -122,18 +125,21 @@
     const info = partyInfo(party);
     document.title = `${info.name} – Riksförande`;
     mount(el, ui.loading(`Hämtar ${info.name}…`));
-    let members, leaders, pc, index;
+    let comp, leaders, pc, index;
     try {
-      [members, leaders, pc, index] = await Promise.all([api.members(), api.partyLeaders(), api.partyCounts(rm), api.voteIndex(rm)]);
+      [comp, leaders, pc, index] = await Promise.all([api.composition(rm), api.leadersForRm(rm), api.partyCounts(rm), api.voteIndex(rm)]);
     } catch (err) {
       if (ctx.alive()) mount(el, ui.errorBox(err, () => ctx.reload()));
       return;
     }
     if (!ctx.alive()) return;
 
+    const members = comp.all;
     const indexById = new Map(index.map((v) => [v.id, v]));
-    const sittingIids = new Set(members.map((m) => m.iid));
-    const partyMembers = members.filter((m) => m.party === party);
+    const served = new Set(comp.all.map((m) => m.iid));
+    const seatCount = comp.seats.filter((m) => m.party === party).length;
+    const partyMembers = comp.all.filter((m) => m.party === party).sort((a, b) => (a.partYear ? 1 : 0) - (b.partYear ? 1 : 0) || (a.sort || a.name).localeCompare(b.sort || b.name, 'sv'));
+    const partYear = partyMembers.filter((m) => m.partYear).length;
     const L = leaders[party] || { leaders: [], groupLeaders: [] };
     const tallies = pc[party] || {};
     const sum = analysis.partySummary(pc, party, index);
@@ -150,7 +156,7 @@
     const others = analysis.activeParties(pc).filter((p) => p !== party)
       .map((p) => ({ p, ...analysis.agreement(pc, party, p) })).filter((x) => x.rate != null).sort((a, b) => b.rate - a.rate);
 
-    const leaderBlocks = L.leaders.map((x) => leaderCard(x, sittingIids.has(x.person.iid)));
+    const leaderBlocks = L.leaders.map((x) => leaderCard(x, comp, served, rm));
     const lineEl = h('div');
     const outEl = h('div');
 
@@ -160,14 +166,16 @@
       h('div.page-head',
         h('div.row', { style: { gap: '14px' } },
           ui.partyBadge(party, { lg: true }),
-          h('div', h('h1', info.name), h('p', { style: { margin: 0 } }, `${partyMembers.length} mandat i riksdagen i dag`))),
+          h('div', h('h1', RF.partyNameIn(party, rm)), h('p', { style: { margin: 0 } },
+            comp.live ? `${seatCount} mandat i riksdagen i dag` : `${seatCount} mandat vid slutet av riksmötet ${rm}`))),
         h('div.chips', PARTY_ORDER.filter((p) => p !== party).map((p) => h('a', { href: `#/party/${p}`, 'aria-label': partyInfo(p).name }, ui.partyBadge(p))))),
 
       h('section',
-        h('h2', L.leaders.length > 1 ? 'Partiledare (språkrör)' : 'Partiledare'),
-        L.leaders.length ? h('div.leaders', leaderBlocks.map((b) => b.card)) : ui.empty('Ingen partiledare finns angiven i riksdagens öppna data.'),
+        h('h2', party === 'MP' ? 'Språkrör' : comp.live ? 'Partiledare' : `Partiledare under ${rm}`),
+        L.leaders.length ? h('div.leaders', leaderBlocks.map((b) => b.card)) : ui.empty('Ingen partiledare finns angiven i riksdagens öppna data för den här perioden.'),
         L.groupLeaders.length ? h('p.muted', { style: { marginTop: '10px', fontSize: '.9rem' } }, 'Gruppledare i riksdagen: ',
-          L.groupLeaders.map((g, i) => [i ? ', ' : '', h('a', { href: `#/member/${g.person.iid}` }, g.person.name)])) : null),
+          L.groupLeaders.map((g, i) => [i ? ', ' : '', h('a', { href: `#/member/${g.person.iid}` }, g.person.name),
+            comp.live ? null : h('span.faint', ` (${ui.tenure(g, rm)})`)])) : null),
 
       h('section.section',
         h('h2', `Partilinjen ${rm}`),
@@ -201,9 +209,10 @@
         lineEl),
 
       partyMembers.length ? h('section.section',
-        h('h2', `Ledamöter (${partyMembers.length})`),
+        h('h2', comp.live ? `Ledamöter (${partyMembers.length})` : `Ledamöter under ${rm} (${partyMembers.length})`,
+          partYear ? h('small.muted', `varav ${partYear} under en del av riksmötet, t.ex. ersättare`) : null),
         h('div.grid.cards', partyMembers.map((m) => h('a.card.member-card', { href: `#/member/${m.iid}` },
-          ui.avatar(m), h('div.t', h('b', m.name), h('small', m.valkrets)))))) : null);
+          ui.avatar(m), h('div.t', h('b', m.name), h('small', m.valkrets), m.partYear ? h('small', 'Del av riksmötet') : null))))) : null);
 
     // Partiledare som är statsråd kan ha röster från tidigare år, så vi letar alltid.
     leaderBlocks.forEach((b, i) => fillLeaderRecord(b.record, L.leaders[i].person, rm, pc, indexById, ctx.alive));

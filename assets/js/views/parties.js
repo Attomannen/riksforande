@@ -7,15 +7,14 @@
   const RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
   function rampColor(t) { return RAMP[Math.max(0, Math.min(RAMP.length - 1, Math.round(t * (RAMP.length - 1))))]; }
 
-  function leaderLine(entry, sittingIids) {
+  function leaderLine(entry, comp, served, rm) {
     const p = entry.person;
-    const sitting = sittingIids.has(p.iid);
     return h('div.leader-mini',
       ui.avatar(p),
       h('div',
         h('b', p.name),
-        h('small', `${entry.role}${entry.since ? ' sedan ' + entry.since.slice(0, 4) : ''}`),
-        h('small', sitting ? 'Sitter i riksdagen' : p.status && !/ersättare/i.test(p.status) ? `${p.status} · röstar inte i kammaren` : 'Inte tjänstgörande ledamot')));
+        h('small', `${entry.role} ${ui.tenure(entry, rm)}`.trim()),
+        h('small', ui.leaderSeat(entry, comp, served))));
   }
 
   function heatmap(pc) {
@@ -51,19 +50,20 @@
     mount(el,
       h('div.page-head', h('div',
         h('h1', 'Partier & partiledare'),
-        h('p', `Vem som leder varje parti, hur enigt partierna röstar och vilka partier som röstar lika. Siffrorna gäller riksmötet ${rm}.`))),
+        h('p', `Vem som ledde varje parti, hur riksdagen var sammansatt, hur enigt partierna röstade och vilka partier som röstade lika under riksmötet ${rm}. Byt riksmöte i menyn högst upp.`))),
       body);
 
-    let members, leaders, pc, index;
+    let comp, leaders, pc, index;
     try {
-      [members, leaders, pc, index] = await Promise.all([api.members(), api.partyLeaders(), api.partyCounts(rm), api.voteIndex(rm)]);
+      [comp, leaders, pc, index] = await Promise.all([api.composition(rm), api.leadersForRm(rm), api.partyCounts(rm), api.voteIndex(rm)]);
     } catch (err) {
       if (ctx.alive()) mount(body, ui.errorBox(err, () => ctx.reload()));
       return;
     }
     if (!ctx.alive()) return;
 
-    const sittingIids = new Set(members.map((m) => m.iid));
+    const members = comp.seats;
+    const served = new Set(comp.all.map((m) => m.iid));
     const seats = RF.groupBy(members, (m) => m.party);
     const active = analysis.activeParties(pc);
 
@@ -73,10 +73,10 @@
       const L = leaders[p] || { leaders: [], groupLeaders: [] };
       return h('a.card.party-card', { href: `#/party/${p}` },
         h('span.stripe', { style: { background: info.color } }),
-        h('div.head', ui.partyBadge(p, { lg: true }), h('h3', info.name)),
-        L.leaders.length ? h('div.stack', L.leaders.map((x) => leaderLine(x, sittingIids))) : h('small.faint', 'Partiledaren finns inte i riksdagens öppna data'),
+        h('div.head', ui.partyBadge(p, { lg: true }), h('h3', RF.partyNameIn(p, rm))),
+        L.leaders.length ? h('div.stack', L.leaders.map((x) => leaderLine(x, comp, served, rm))) : h('small.faint', 'Partiledaren finns inte i riksdagens öppna data'),
         h('dl.kv',
-          h('dt', 'Mandat i dag'), h('dd', seats.has(p) ? seats.get(p).length : 0),
+          h('dt', comp.live ? 'Mandat i dag' : 'Mandat vid riksmötets slut'), h('dd', seats.has(p) ? seats.get(p).length : 0),
           sum ? [h('dt', { 'data-tip': 'Andel voteringar där alla partiets röstande ledamöter följde partilinjen' }, `Helt enigt (${rm})`), h('dd', pct(sum.cohesion))] : null,
           sum ? [h('dt', 'Avvikande röster'), h('dd', fmtNum(sum.devTotal))] : null,
           sum ? [h('dt', { 'data-tip': 'Andel voteringar där partilinjen stämde med utfallet' }, 'På vinnande sida'), h('dd', pct(sum.winRate))] : null));
@@ -89,16 +89,19 @@
     mount(body,
       h('div.grid.two',
         h('div.card',
-          h('h2', 'Riksdagen i dag'),
-          h('p.muted', { style: { fontSize: '.88rem' } }, `${members.length} tjänstgörande ledamöter. Håll muspekaren över en plats för att se vem som sitter där – klicka för att öppna ledamotens röster.`),
-          ui.hemicycle(seatData, { colorBy: 'party', label: 'Mandat per parti', centerText: String(members.length), centerSub: 'mandat' }),
-          seatLegend),
+          h('h2', comp.live ? 'Riksdagen i dag' : `Riksdagen ${rm}`),
+          h('p.muted', { style: { fontSize: '.88rem' } },
+            comp.live ? `${members.length} tjänstgörande ledamöter. ` : `Sammansättningen vid riksmötets sista votering ${RF.fmtDate(comp.asOf)}. `,
+            'Håll muspekaren över en plats för att se vem som satt där – klicka för att öppna ledamotens röster.'),
+          members.length
+            ? [ui.hemicycle(seatData, { colorBy: 'party', label: 'Mandat per parti', centerText: String(members.length), centerSub: 'mandat' }), seatLegend]
+            : ui.empty('Sammansättningen kan inte visas förrän riksmötet har haft sin första votering.')),
         h('div.card',
           h('h2', 'Hur ofta partierna röstar lika'),
           h('p.muted', { style: { fontSize: '.88rem' } }, `Andel voteringar under ${rm} där båda partierna hade samma linje (Ja, Nej eller Avstår).`),
           heatmap(pc))),
       h('section.section',
-        h('h2', 'Partiledare', h('small.muted', 'Klicka på ett parti för partilinjen och avvikarna')),
+        h('h2', comp.live ? 'Partiledare' : `Partiledare under ${rm}`, h('small.muted', 'Klicka på ett parti för partilinjen och avvikarna')),
         h('div.grid.cards', cards)));
   };
 })(window.RF);

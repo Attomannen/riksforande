@@ -536,11 +536,111 @@
     });
   }
 
+  // ---------------------------------------------------------------- composition per riksmöte
+  /** {iid: [ja, nej, avstår, frånvarande]} for everyone who took part in a riksmöte's votes (substitutes included). */
+  async function fetchMemberTally(rm) {
+    const j = await getJSON('/voteringlista/', { rm, sz: 5000, utformat: 'json', gruppering: 'iid' });
+    const out = {};
+    for (const r of arr(j && j.voteringlista && j.voteringlista.votering)) if (r.intressent_id) out[r.intressent_id] = counts4(r);
+    return out;
+  }
+
+  /**
+   * Who sat in the Riksdag during a riksmöte: {live, asOf, seats, all}.
+   * The current riksmöte uses the live member list. Earlier ones are rebuilt from the votes: every vote lists all
+   * 349 seats, so the year's last vote gives the composition at its end, and the per-member tally adds everyone
+   * else who voted that year (substitutes and members who left), marked partYear.
+   */
+  function composition(rm) {
+    if (rm >= RF.rmForDate(new Date())) {
+      return members().then((ms) => ({ live: true, asOf: null, seats: ms, all: ms }));
+    }
+    return cached(`composition:v1:${rm}`, ttlFor(rm), async () => {
+      const index = (await voteIndex(rm)).filter((v) => v.bet);
+      if (!index.length) return { live: false, asOf: null, seats: [], all: [] };
+      const last = index[0];
+      const first = index[index.length - 1];
+      const [lastRows, firstRows, tally, current] = await Promise.all([
+        voteRows(rm, last.bet, last.punkt, last.id),
+        voteRows(rm, first.bet, first.punkt, first.id),
+        fetchMemberTally(rm),
+        members().catch(() => []),
+      ]);
+      const photo = new Map(current.map((m) => [m.iid, m]));
+      const fromRow = (r) => ({
+        iid: r.iid, name: r.name, first: r.first, last: r.last, sort: `${r.last},${r.first}`,
+        party: r.party, valkrets: r.valkrets, gender: r.gender, born: r.born, partyRoles: [],
+        img: photo.get(r.iid) ? photo.get(r.iid).img : null, imgSmall: photo.get(r.iid) ? photo.get(r.iid).imgSmall : null,
+      });
+      const byIid = new Map();
+      firstRows.forEach((r) => byIid.set(r.iid, fromRow(r)));
+      lastRows.forEach((r) => byIid.set(r.iid, fromRow(r))); // end-of-year details win
+      const missing = Object.keys(tally).filter((iid) => !byIid.has(iid));
+      const people = await Promise.all(missing.map((iid) => person(iid).catch(() => null)));
+      people.forEach((p, i) => {
+        if (!p) return;
+        byIid.set(missing[i], {
+          iid: p.iid, name: p.name, first: p.first, last: p.last, sort: p.sort, party: p.party, valkrets: p.valkrets,
+          gender: p.gender, born: p.born, partyRoles: [], img: p.img, imgSmall: p.imgSmall,
+        });
+      });
+      const atEnd = new Set(lastRows.map((r) => r.iid));
+      const all = [...byIid.values()].map((m) => ({ ...m, tally: tally[m.iid] || null, partYear: !atEnd.has(m.iid) }));
+      return { live: false, asOf: last.date, seats: all.filter((m) => atEnd.has(m.iid)), all };
+    });
+  }
+
+  /**
+   * Party leaders (and parliamentary group leaders) who held the post at any time during a riksmöte,
+   * from the generated history (assets/js/data/leaders.js) plus live roles for changes since it was generated.
+   * {party: {leaders: [{person, role, since, until}], groupLeaders: [...]}}
+   */
+  async function leadersForRm(rm) {
+    const start = parseInt(rm, 10);
+    const span = [`${start}-09-01`, `${start + 1}-08-31`];
+    const overlaps = (from, to) => (from || '0000') <= span[1] && (!to || to >= span[0]);
+    const out = {};
+    for (const p of PARTY_ORDER) out[p] = { leaders: [], groupLeaders: [] };
+    const add = (party, entry) => {
+      if (!out[party]) return;
+      const list = LEADER_ROLES.test(entry.role) ? out[party].leaders : out[party].groupLeaders;
+      const same = list.find((x) => x.person.iid === entry.person.iid && x.role === entry.role);
+      // The live record adds details the history lacks, such as "Statsminister" for a leader in government.
+      if (same) same.person = { ...same.person, ...entry.person };
+      else list.push(entry);
+    };
+    const history = (RF.LEADER_HISTORY && RF.LEADER_HISTORY.roles) || [];
+    // Several stints in the same role (e.g. Folkpartiet → Liberalerna) are merged into one period.
+    const merged = new Map();
+    for (const r of history) {
+      if (!overlaps(r.from, r.to)) continue;
+      const key = `${r.iid}|${r.role}|${r.party}`;
+      const prev = merged.get(key);
+      if (!prev) merged.set(key, { ...r });
+      else {
+        if (r.from < prev.from) prev.from = r.from;
+        if (!r.to || (prev.to && r.to > prev.to)) prev.to = r.to;
+      }
+    }
+    for (const r of merged.values()) {
+      const img = r.img || null;
+      add(r.party, { person: { iid: r.iid, name: r.name, img, imgSmall: img && img.replace('_192.', '_80.') }, role: r.role, since: r.from, until: r.to || null });
+    }
+    const live = await partyLeaders().catch(() => null);
+    if (live) {
+      for (const p of PARTY_ORDER) {
+        for (const x of [...live[p].leaders, ...live[p].groupLeaders]) if (overlaps(x.since, null)) add(p, { ...x, until: null });
+      }
+    }
+    for (const p of PARTY_ORDER) for (const k of ['leaders', 'groupLeaders']) out[p][k].sort((a, b) => (a.since || '').localeCompare(b.since || ''));
+    return out;
+  }
+
   Object.assign(RF, {
     api: {
       voteIndex, partyCounts, voteRows, memberVotes, matter, docStatus, docHtml,
       members, person, partyLeaders, fetchCounts, clearCache, cached, ttlFor, getJSON, propositions,
-      chamberCalendar, pendingReports,
+      chamberCalendar, pendingReports, composition, leadersForRm,
     },
   });
 })(window.RF);

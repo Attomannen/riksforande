@@ -97,7 +97,7 @@
     const { rm, latestRm, currentRm } = RF.state;
     let kind = null;
     if (route && currentRm !== latestRm) {
-      if (route.tab === 'votes' && path === '/votes' && rm === latestRm) kind = 'previous';
+      if (['/votes', '/members', '/parties'].includes(path) && rm === latestRm) kind = 'previous';
       else if ((route.tab === 'parties' || route.tab === 'members') && rm === currentRm) kind = 'empty';
     }
     if (!kind) { el.hidden = true; RF.clear(el); return; }
@@ -109,7 +109,8 @@
     mount(el, kind === 'previous'
       ? h('div.callout.row',
         h('span', { style: { flex: 1, minWidth: '240px' } }, `Riksmötet ${currentRm} har börjat, men kammaren har inte röstat ännu – `, when, `. Här visas ${latestRm}.`),
-        h('button.btn.small', { type: 'button', onclick: () => setRm(currentRm) }, `Visa vad som väntar ${currentRm}`))
+        h('button.btn.small', { type: 'button', onclick: () => setRm(currentRm) },
+          path === '/votes' ? `Visa vad som väntar ${currentRm}` : `Visa riksdagen ${currentRm}`))
       : h('div.callout.row',
         h('span', { style: { flex: 1, minWidth: '240px' } }, `Inga voteringar ännu under ${currentRm} – `, when, '. Siffrorna nedan fylls på efter det.'),
         h('button.btn.small', { type: 'button', onclick: () => setRm(latestRm) }, `Visa ${latestRm}`)));

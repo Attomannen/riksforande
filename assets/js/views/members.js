@@ -27,14 +27,45 @@
   RF.views.members = async function (ctx) {
     const { el, rm } = ctx;
     const body = h('div', ui.loading('Hämtar ledamöter…'));
-    mount(el, h('div.page-head', h('div', h('h1', 'Riksdagens ledamöter'), h('p', 'Alla tjänstgörande ledamöter. Öppna en ledamot för att se varje röst, hur ofta hen följer partiet och varje gång hen har brutit partilinjen.'))), body);
+    const title = h('h1', 'Riksdagens ledamöter');
+    const intro = h('p', 'Öppna en ledamot för att se varje röst, hur ofta hen följer partiet och varje gång hen har brutit partilinjen.');
+    mount(el, h('div.page-head', h('div', title, intro)), body);
 
-    let members;
-    try { members = await api.members(); } catch (err) {
+    let comp, leaders;
+    try {
+      [comp, leaders] = await Promise.all([api.composition(rm), api.leadersForRm(rm).catch(() => null)]);
+    } catch (err) {
       if (ctx.alive()) mount(body, ui.errorBox(err, () => ctx.reload()));
       return;
     }
     if (!ctx.alive()) return;
+
+    const partYearCount = comp.all.filter((m) => m.partYear).length;
+    if (comp.live) {
+      title.textContent = 'Riksdagens ledamöter';
+      RF.mount(intro, `Alla ${comp.all.length} tjänstgörande ledamöter i dag. Öppna en ledamot för att se varje röst, hur ofta hen följer partiet och varje gång hen har brutit partilinjen.`);
+    } else {
+      title.textContent = `Ledamöter under riksmötet ${rm}`;
+      RF.mount(intro, `Alla som röstade i kammaren under riksmötet: ${comp.seats.length} som satt vid den sista voteringen ${RF.fmtDate(comp.asOf)}`,
+        partYearCount ? ` och ${partYearCount} som tjänstgjorde en del av året, till exempel ersättare eller ledamöter som slutade.` : '.');
+    }
+    if (!comp.all.length) {
+      mount(body, ui.empty(`Inga ledamöter kan visas för ${rm} förrän riksmötet har haft sin första votering.`));
+      return;
+    }
+
+    // Leadership roles held during this riksmöte (current roles come with the live member list).
+    const rolesByIid = new Map();
+    if (!comp.live && leaders) {
+      for (const p of Object.keys(leaders)) {
+        for (const x of [...leaders[p].leaders, ...leaders[p].groupLeaders]) {
+          if (!rolesByIid.has(x.person.iid)) rolesByIid.set(x.person.iid, []);
+          rolesByIid.get(x.person.iid).push(x.role);
+        }
+      }
+    }
+    const roleText = (m) => (comp.live ? m.partyRoles.map((r) => r.role) : rolesByIid.get(m.iid) || []).join(', ');
+    let members = comp.all;
 
     const q = ctx.query;
     const selected = new Set((q.get('parti') || '').split(',').filter(Boolean));
@@ -47,6 +78,8 @@
       b.addEventListener('click', () => { if (selected.has(p)) selected.delete(p); else selected.add(p); b.setAttribute('aria-pressed', String(selected.has(p))); draw(); });
       return b;
     }));
+    const atEndOnly = h('input', { type: 'checkbox', checked: q.get('slut') === '1' });
+    const atEndLabel = !comp.live && partYearCount ? h('label.check', atEndOnly, 'Bara de som satt vid riksmötets slut') : null;
     const rebelsArea = h('div');
     const grid = h('div');
     const countEl = h('span.muted', { style: { fontSize: '.85rem' } });
@@ -73,7 +106,8 @@
 
     const draw = () => {
       const term = norm(search.value.trim());
-      let list = members.filter((m) => (!term || norm(`${m.name} ${m.valkrets}`).includes(term)) && (!selected.size || selected.has(m.party)) && (!vkSel.value || m.valkrets === vkSel.value));
+      let list = members.filter((m) => (!term || norm(`${m.name} ${m.valkrets}`).includes(term)) && (!selected.size || selected.has(m.party)) &&
+        (!vkSel.value || m.valkrets === vkSel.value) && (!atEndOnly.checked || !m.partYear));
       const sort = sortSel.value;
       const seat = (p) => SEAT_ORDER.indexOf(p);
       if (sort === 'party') list = list.slice().sort((a, b) => seat(a.party) - seat(b.party) || a.sort.localeCompare(b.sort, 'sv'));
@@ -85,13 +119,14 @@
       else {
         mount(grid, h('div.grid.cards', list.map((m) => {
           const n = counts ? counts.get(m.iid) || 0 : null;
-          const special = m.status && !/^Tjänstgörande riksdagsledamot$/i.test(m.status) ? m.status.replace(/^Tjänstgörande /i, '') : null;
+          const special = comp.live && m.status && !/^Tjänstgörande riksdagsledamot$/i.test(m.status) ? m.status.replace(/^Tjänstgörande /i, '') : m.partYear ? 'Del av riksmötet' : null;
+          const roles = roleText(m);
           return h('a.card.member-card', { href: `#/member/${m.iid}` },
             ui.avatar(m),
             h('div.t', { style: { flex: 1 } },
               h('b', m.name),
               h('small', m.valkrets),
-              special || m.partyRoles.length ? h('small', { style: { color: 'var(--text-2)' } }, [m.partyRoles.map((r) => r.role).join(', '), special].filter(Boolean).join(' · ')) : null),
+              special || roles ? h('small', { style: { color: 'var(--text-2)' } }, [roles, special].filter(Boolean).join(' · ')) : null),
             h('div.stack', { style: { textAlign: 'right' } }, ui.partyBadge(m.party), n != null ? (n ? ui.rebelBadge(n, String(n)) : h('span.faint', { style: { fontSize: '.78rem' } }, '0')) : null));
         })));
       }
@@ -100,17 +135,19 @@
       if (selected.size) params.set('parti', [...selected].join(','));
       if (vkSel.value) params.set('valkrets', vkSel.value);
       if (sort !== 'name') params.set('sort', sort);
+      if (atEndOnly.checked) params.set('slut', '1');
       ctx.setQuery(params);
     };
     search.addEventListener('input', debounce(draw, 120));
     vkSel.addEventListener('change', draw);
+    atEndOnly.addEventListener('change', draw);
     sortSel.addEventListener('change', () => {
       if (sortSel.value === 'rebels' && !counts) rebelsArea.querySelector('button') && rebelsArea.querySelector('button').click();
       draw();
     });
 
     mount(body,
-      h('div.filters', search, vkSel, sortSel, h('span.spacer'), countEl),
+      h('div.filters', search, vkSel, sortSel, atEndLabel, h('span.spacer'), countEl),
       h('div', { style: { marginBottom: '12px' } }, partyChips),
       h('div', { style: { marginBottom: '12px' } }, rebelsArea),
       grid);

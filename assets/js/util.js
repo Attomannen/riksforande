@@ -170,6 +170,8 @@ window.RF = window.RF || {};
   /** Code the API expects for a party in a given riksmöte. */
   function partyApiCode(code, rm) { return code === 'L' && rm < '2015/16' ? 'FP' : code; }
   function partyInfo(code) { return PARTIES[code] || { name: code, color: '#8A8A86' }; }
+  /** The party's name in a given riksmöte (Folkpartiet liberalerna became Liberalerna in November 2015). */
+  function partyNameIn(code, rm) { return code === 'L' && rm < '2015/16' ? 'Folkpartiet liberalerna' : partyInfo(code).name; }
 
   function luminance(hex) {
     const n = parseInt(hex.slice(1), 16);
@@ -291,7 +293,7 @@ window.RF = window.RF || {};
   Object.assign(RF, {
     h, s, clear, mount, arr, int, sum, by, groupBy, debounce, norm,
     fmtDate, pct, fmtNum, fmtBytes, plural, safeHtml, htmlText,
-    PARTIES, PARTY_ORDER, SEAT_ORDER, normParty, partyApiCode, partyInfo, inkOn,
+    PARTIES, PARTY_ORDER, SEAT_ORDER, normParty, partyApiCode, partyInfo, partyNameIn, inkOn,
     committee, docType, riksdagenUrl, memberUrl, explainCaption, vilandeKind, electionAfter,
     rmForDate, rmList, prevRm, rmSlug, rmFromSlug,
   });
